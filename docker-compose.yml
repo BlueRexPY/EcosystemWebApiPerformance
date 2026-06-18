@@ -26,22 +26,10 @@ services:
     container_name: casino_redis
     ports:
       - "6379:6379"
-    command: redis-server --appendonly no --maxmemory 512mb --maxmemory-policy allkeys-lru
+    # Tuned for synchronous data consistency: sync disk mutations every second
+    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 512mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  nats:
-    image: nats:2.10-alpine
-    container_name: casino_nats
-    ports:
-      - "4222:4222" # Client connections
-      - "8222:8222" # HTTP Monitoring
-    command: ["-js", "-sd", "/data"] # Enable JetStream
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "4222"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -53,8 +41,6 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    depends_on:
-      - nats
 
 volumes:
   pgdata:

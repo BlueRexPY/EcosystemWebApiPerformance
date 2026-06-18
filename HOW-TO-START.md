@@ -13,10 +13,10 @@
 ## 1. Infrastructure Layer
 
 ```bash
-# Start PostgreSQL, Redis, NATS, Prometheus
+# Start PostgreSQL, Redis, Prometheus
 docker compose up -d
 
-# Confirm all four are healthy
+# Confirm all three are healthy
 docker compose ps
 
 # Verify 100,000 players seeded
@@ -39,7 +39,7 @@ bun run dev
 
 ```bash
 cd apps/go
-go run .
+/home/admin/.local/go/bin/go run .
 # Listening on :3001
 ```
 
@@ -61,7 +61,7 @@ cd clients
 ## 4. Kubernetes Deployment (Optional)
 
 ```bash
-# Apply infra manifests (Redis, NATS, namespace)
+# Apply infra manifests (namespace, Redis)
 kubectl apply -f k8s/infra.yaml
 
 # Deploy each stack (manifests TBD)
@@ -74,23 +74,12 @@ kubectl apply -f k8s/infra.yaml
 
 Each stack exposes the same REST contract:
 
-| Method | Path                       | Description                  |
-| ------ | -------------------------- | ---------------------------- |
-| `POST` | `/wallet/:playerId/bet`    | Place a bet (deduct balance) |
-| `POST` | `/wallet/:playerId/win`    | Record a win (add balance)   |
-| `GET`  | `/wallet/:playerId`        | Read current balance         |
-| `GET`  | `/wallet/:playerId/ledger` | Fetch transaction history    |
-| `GET`  | `/health`                  | Liveness probe               |
-| `GET`  | `/metrics`                 | Prometheus scrape target     |
-
 ## Useful Commands
 
 ```bash
-# Tail NATS monitoring
-curl http://localhost:8222/varz
-
-# Check Redis hit/miss ratio
+# Check Redis hit/miss ratio + AOF status
 docker exec -it casino_redis redis-cli INFO stats | grep keyspace
+docker exec -it casino_redis redis-cli INFO persistence | grep aof
 
 # Postgres active connections
 docker exec -it casino_postgres psql -U engine_admin -d casino_db -c "SELECT count(*) FROM pg_stat_activity;"
