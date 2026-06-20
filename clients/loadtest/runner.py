@@ -30,7 +30,7 @@ from .config import (
     WrkConfig,
     result_path,
 )
-from .formatter import write_result_md, write_summary_md
+from .formatter import update_readme, write_result_md, write_summary_md
 from .metrics import BenchmarkResult, MemoryStats
 
 logger = logging.getLogger(__name__)
@@ -151,9 +151,11 @@ def _build_wrk_cmd(eco: Ecosystem, scenario: Scenario, cfg: WrkConfig) -> list[s
 def _write_wrk_post_script(payload: dict, _url: str) -> Path:
     """Write a wrk Lua script for POST requests with JSON body."""
     body = json.dumps(payload)
+    # Escape backslashes for Lua single-quoted strings so \n stays literal \n
+    body_lua = body.replace("\\", "\\\\")
     script = (
         f'wrk.method = "POST"\n'
-        f"wrk.body = '{body}'\n"
+        f"wrk.body = '{body_lua}'\n"
         f'wrk.headers["Content-Type"] = "application/json"\n'
     )
     path = Path("/tmp/wrk_post_script.lua")
@@ -500,80 +502,152 @@ async def _run_py_async(
     return samples
 
 
+def _run_mixed_with_wrk(
+    eco: Ecosystem,
+    cfg: PyAsyncConfig,
+    name: str,
+    weighted_payloads: list[tuple[float, dict]],
+    base_path: str = "/casino/callback",
+) -> BenchmarkResult:
+    """Run a mixed workload using wrk with a Lua script for weighted random payload selection."""
+    url = f"http://127.0.0.1:{eco.port}{base_path}"
+    bodies = [json.dumps(p) for _, p in weighted_payloads]
+    weights = [w for w, _ in weighted_payloads]
+
+    lua_lines = [
+        'wrk.method = "POST"',
+        'wrk.headers["Content-Type"] = "application/json"',
+        "math.randomseed(os.time())",
+        "",
+        "request = function()",
+    ]
+    for i, body in enumerate(bodies):
+        safe_body = body.replace("\\", "\\\\").replace("'", "\\'")
+        if i == 0:
+            lua_lines.append(f"    local bodies = {{ [1] = '{safe_body}'")
+        else:
+            lua_lines.append(f"        , [{i + 1}] = '{safe_body}'")
+    lua_lines[-1] += " }"
+    lua_lines.append(f"    local weights = {{ {', '.join(str(w) for w in weights)} }}")
+    lua_lines.append("    local r = math.random()")
+    lua_lines.append("    local cumulative = 0")
+    for i, w in enumerate(weights):
+        lua_lines.append(f"    cumulative = cumulative + {w}")
+        lua_lines.append(
+            f"    if r < cumulative then wrk.body = bodies[{i + 1}] return wrk.format('POST', wrk.path, wrk.headers, wrk.body) end"
+        )
+    lua_lines.append("    return wrk.format('POST', wrk.path, wrk.headers, bodies[1])")
+    lua_lines.append("end")
+
+    script_path = Path(f"/tmp/wrk_mixed_{name}.lua")
+    script_path.write_text("\n".join(lua_lines))
+
+    cmd = [
+        "wrk",
+        "-t",
+        "2",
+        "-c",
+        str(cfg.concurrency),
+        "-d",
+        f"{cfg.duration_seconds}s",
+        "-s",
+        str(script_path),
+        url,
+    ]
+    logger.info("wrk mixed: %s", " ".join(cmd))
+    r = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=cfg.duration_seconds + 30
+    )
+    from .config import WrkConfig
+
+    return _parse_wrk_output(r.stdout + "\n" + r.stderr, eco, name)
+
+
+def _run_mixed_full_with_wrk(
+    eco: Ecosystem,
+    cfg: PyAsyncConfig,
+) -> BenchmarkResult:
+    """Mixed full workload across all endpoint types — uses wrk with multi-path Lua."""
+    base = f"http://127.0.0.1:{eco.port}"
+    # (weight, path, payload)
+    subs = [
+        (10, "/casino/authenticate", SCENARIOS["casino_auth"].payload),
+        (35, "/casino/callback", SCENARIOS["casino_bet"].payload),
+        (15, "/casino/callback", SCENARIOS["casino_win"].payload),
+        (5, "/casino/callback", SCENARIOS["casino_rollback"].payload),
+        (5, "/psp/callback", SCENARIOS["psp_deposit"].payload),
+        (15, "/graphql", SCENARIOS["player_balance"].payload),
+        (10, "/graphql", SCENARIOS["player_login"].payload),
+        (5, "/graphql", SCENARIOS["player_me"].payload),
+    ]
+    weights = [s[0] for s in subs]
+    paths = [s[1] for s in subs]
+    payloads = [s[2] for s in subs]
+    bodies = [json.dumps(p) if p else "{}" for p in payloads]
+
+    lua_lines = [
+        'wrk.method = "POST"',
+        'wrk.headers["Content-Type"] = "application/json"',
+        "math.randomseed(os.time())",
+        "",
+        "request = function()",
+        "    local weights = { " + ", ".join(str(w) for w in weights) + " }",
+        "    local paths = { " + ", ".join(f'"{p}"' for p in paths) + " }",
+    ]
+    lua_lines.append("    local bodies = {")
+    for i, body in enumerate(bodies):
+        safe = body.replace("\\", "\\\\").replace("'", "\\'")
+        lua_lines.append(f"        [{i + 1}] = '{safe}',")
+    lua_lines.append("    }")
+    lua_lines.append("    local r = math.random()")
+    lua_lines.append("    local cumulative = 0")
+    for i, w in enumerate(weights):
+        lua_lines.append(f"    cumulative = cumulative + {w}")
+        lua_lines.append(
+            f"    if r < cumulative then wrk.path = paths[{i + 1}] wrk.body = bodies[{i + 1}] return wrk.format('POST', wrk.path, wrk.headers, wrk.body) end"
+        )
+    lua_lines.append("    return wrk.format('POST', paths[1], wrk.headers, bodies[1])")
+    lua_lines.append("end")
+
+    script_path = Path("/tmp/wrk_mixed_full.lua")
+    script_path.write_text("\n".join(lua_lines))
+
+    cmd = [
+        "wrk",
+        "-t",
+        "2",
+        "-c",
+        str(cfg.concurrency),
+        "-d",
+        f"{cfg.duration_seconds}s",
+        "-s",
+        str(script_path),
+        f"{base}/casino/callback",
+    ]
+    logger.info("wrk mixed_full: %s", " ".join(cmd))
+    r = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=cfg.duration_seconds + 30
+    )
+    from .config import WrkConfig
+
+    return _parse_wrk_output(r.stdout + "\n" + r.stderr, eco, "mixed_full")
+
+
 def _run_py_async_mixed_casino(
     eco: Ecosystem,
     cfg: PyAsyncConfig,
 ) -> BenchmarkResult:
-    """Mixed casino workload: 80% bet, 15% win, 5% rollback."""
-    import random
-
-    bet_payload = json.dumps(SCENARIOS["casino_bet"].payload)
-    win_payload = json.dumps(SCENARIOS["casino_win"].payload)
-    rollback_payload = json.dumps(SCENARIOS["casino_rollback"].payload)
-    url = f"http://127.0.0.1:{eco.port}/casino/callback"
-
-    async def _mixed_worker(
-        client: httpx.AsyncClient,
-        samples: list[_Sample],
-        stop: asyncio.Event,
-        lock: asyncio.Lock,
-    ) -> None:
-        while not stop.is_set():
-            r = random.random()
-            if r < 0.80:
-                body = bet_payload
-            elif r < 0.95:
-                body = win_payload
-            else:
-                body = rollback_payload
-
-            start = time.perf_counter()
-            try:
-                resp = await client.post(
-                    url, content=body, headers={"Content-Type": "application/json"}
-                )
-                latency_ms = (time.perf_counter() - start) * 1000
-                async with lock:
-                    samples.append(
-                        _Sample(status=resp.status_code, latency_ms=latency_ms)
-                    )
-            except Exception:
-                latency_ms = (time.perf_counter() - start) * 1000
-                async with lock:
-                    samples.append(_Sample(status=0, latency_ms=latency_ms))
-
-    async def _run():
-        samples: list[_Sample] = []
-        lock = asyncio.Lock()
-        stop = asyncio.Event()
-        limits = httpx.Limits(max_connections=cfg.concurrency + 10)
-
-        async with httpx.AsyncClient(
-            limits=limits, timeout=httpx.Timeout(30.0)
-        ) as client:
-            # Warmup
-            warmup_stop = asyncio.Event()
-            warmup_tasks = [
-                asyncio.create_task(_mixed_worker(client, [], warmup_stop, lock))
-                for _ in range(cfg.concurrency)
-            ]
-            await asyncio.sleep(cfg.warmup_seconds)
-            warmup_stop.set()
-            await asyncio.gather(*warmup_tasks, return_exceptions=True)
-
-            # Benchmark
-            tasks = [
-                asyncio.create_task(_mixed_worker(client, samples, stop, lock))
-                for _ in range(cfg.concurrency)
-            ]
-            await asyncio.sleep(cfg.duration_seconds)
-            stop.set()
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-        return samples
-
-    samples = asyncio.run(_run())
-    return _samples_to_result(samples, eco, "mixed_casino", "py-async", cfg)
+    """Mixed casino workload: 80% bet, 15% win, 5% rollback — uses wrk for real throughput."""
+    return _run_mixed_with_wrk(
+        eco,
+        cfg,
+        "mixed_casino",
+        [
+            (0.80, SCENARIOS["casino_bet"].payload),
+            (0.15, SCENARIOS["casino_win"].payload),
+            (0.05, SCENARIOS["casino_rollback"].payload),
+        ],
+    )
 
 
 def _samples_to_result(
@@ -612,16 +686,13 @@ def run_py_async(
     scenario: Scenario,
     cfg: PyAsyncConfig = DEFAULT_PYASYNC,
 ) -> BenchmarkResult:
-    """Run the Python async client against a single scenario."""
+    """Mixed scenarios use wrk for real throughput; player_journey is sequential."""
     if scenario.name == "mixed_casino":
         return _run_py_async_mixed_casino(eco, cfg)
-
     if scenario.name == "mixed_full":
-        return _run_py_async_mixed_full(eco, cfg)
-
+        return _run_mixed_full_with_wrk(eco, cfg)
     if scenario.name == "player_journey":
-        return _run_player_journey(eco, cfg)
-
+        return _run_player_journey(eco, cfg)  # only this one needs py-async (stateful)
     samples = asyncio.run(_run_py_async(eco, scenario, cfg))
     return _samples_to_result(samples, eco, scenario.name, "py-async", cfg)
 
@@ -640,9 +711,9 @@ def _run_py_async_mixed_full(
         ("/casino/callback", SCENARIOS["casino_win"].payload, 15),
         ("/casino/callback", SCENARIOS["casino_rollback"].payload, 5),
         ("/psp/callback", SCENARIOS["psp_deposit"].payload, 5),
-        ("/player/graphql", SCENARIOS["player_balance"].payload, 15),
-        ("/player/graphql", SCENARIOS["player_login"].payload, 10),
-        ("/player/graphql", SCENARIOS["player_me"].payload, 5),
+        ("/graphql", SCENARIOS["player_balance"].payload, 15),
+        ("/graphql", SCENARIOS["player_login"].payload, 10),
+        ("/graphql", SCENARIOS["player_me"].payload, 5),
     ]
     # Build weighted choice
     paths = [s[0] for s in subs]
@@ -813,13 +884,11 @@ def _journey_win_payload(amount_cents: int) -> dict:
     }
 
 
-_JOURNEY_BALANCE_QUERY = {
-    "query": """
+_JOURNEY_BALANCE_QUERY = {"query": """
         query PlayerBalance {
             balance { amount_cents currency }
         }
-    """
-}
+    """}
 
 _JOURNEY_TRANSACTIONS_QUERY = {
     "query": """
@@ -900,23 +969,29 @@ def _run_player_journey(
         """One virtual player's complete journey, repeated until stop."""
         import random as _random
 
-        while not stop_event.is_set():
-            pid = _random_player_id()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), http2=True) as client:
+            while not stop_event.is_set():
+                pid = _random_player_id()
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 # 1. SIGNUP
-                _, lat = await _post_json(client, "/player/graphql", _journey_signup_payload(pid))
+                _, lat = await _post_json(
+                    client, "/graphql", _journey_signup_payload(pid)
+                )
                 step_latencies["signup"].append(lat)
                 all_latencies.append(lat)
 
                 # 2. LOGIN
-                _, lat = await _post_json(client, "/player/graphql", _journey_login_payload(pid))
+                _, lat = await _post_json(
+                    client, "/graphql", _journey_login_payload(pid)
+                )
                 step_latencies["login"].append(lat)
                 all_latencies.append(lat)
 
                 # 3. DEPOSIT
                 deposit_amt = _random_amount(5000, 500000)
-                _, lat = await _post_json(client, "/psp/callback", _journey_deposit_payload(deposit_amt))
+                _, lat = await _post_json(
+                    client, "/psp/callback", _journey_deposit_payload(deposit_amt)
+                )
                 step_latencies["deposit"].append(lat)
                 all_latencies.append(lat)
 
@@ -924,25 +999,33 @@ def _run_player_journey(
                 rounds = _random_rounds()
                 for rnd in range(rounds):
                     # AUTH
-                    _, lat = await _post_json(client, "/casino/authenticate", _journey_auth_payload(pid))
+                    _, lat = await _post_json(
+                        client, "/casino/authenticate", _journey_auth_payload(pid)
+                    )
                     step_latencies["auth"].append(lat)
                     all_latencies.append(lat)
 
                     # BET
                     bet_amt = _random_amount(100, 50000)
-                    _, lat = await _post_json(client, "/casino/callback", _journey_bet_payload(bet_amt))
+                    _, lat = await _post_json(
+                        client, "/casino/callback", _journey_bet_payload(bet_amt)
+                    )
                     step_latencies["bet"].append(lat)
                     all_latencies.append(lat)
 
                     # WIN
                     win_amt = _random_amount(50, 25000)
-                    _, lat = await _post_json(client, "/casino/callback", _journey_win_payload(win_amt))
+                    _, lat = await _post_json(
+                        client, "/casino/callback", _journey_win_payload(win_amt)
+                    )
                     step_latencies["win"].append(lat)
                     all_latencies.append(lat)
 
                     # Check transactions every 3rd round
                     if rnd % 3 == 0:
-                        _, lat = await _post_json(client, "/player/graphql", _JOURNEY_TRANSACTIONS_QUERY)
+                        _, lat = await _post_json(
+                            client, "/graphql", _JOURNEY_TRANSACTIONS_QUERY
+                        )
                         step_latencies["transactions"].append(lat)
                         all_latencies.append(lat)
 
@@ -955,14 +1038,16 @@ def _run_player_journey(
                 all_latencies.append(lat)
 
                 # 6. LOGOUT
-                _, lat = await _post_json(client, "/player/graphql", _JOURNEY_LOGOUT_MUTATION)
+                _, lat = await _post_json(client, "/graphql", _JOURNEY_LOGOUT_MUTATION)
                 step_latencies["logout"].append(lat)
                 all_latencies.append(lat)
 
-            # Record journey completion as one "request" for throughput counting
-            async with lock:
-                for l in all_latencies[-1:]:  # count just the journey as a unit for req/sec
-                    samples.append(_Sample(status=200, latency_ms=l))
+                # Record journey completion as one "request" for throughput counting
+                async with lock:
+                    for l in all_latencies[
+                        -1:
+                    ]:  # count just the journey as a unit for req/sec
+                        samples.append(_Sample(status=200, latency_ms=l))
 
     # --- Run ---
     samples: list[_Sample] = []
@@ -972,7 +1057,9 @@ def _run_player_journey(
     async def _run():
         limits = httpx.Limits(max_connections=cfg.concurrency + 10)
 
-        async with httpx.AsyncClient(limits=limits, timeout=httpx.Timeout(30.0)) as client:
+        async with httpx.AsyncClient(
+            limits=limits, timeout=httpx.Timeout(30.0)
+        ) as client:
             # Warmup: run a few journeys to prime caches
             logger.info("player_journey warmup: %ds...", cfg.warmup_seconds)
             warmup_stop = asyncio.Event()
@@ -1042,7 +1129,17 @@ def _format_journey_breakdown(
         f"{'Step':<16} {'Count':>8} {'Avg(ms)':>10} {'p50(ms)':>10} {'p95(ms)':>10} {'p99(ms)':>10}",
         f"{'─'*16} {'─'*8} {'─'*10} {'─'*10} {'─'*10} {'─'*10}",
     ]
-    for step_name in ["signup", "login", "deposit", "auth", "bet", "win", "transactions", "withdraw", "logout"]:
+    for step_name in [
+        "signup",
+        "login",
+        "deposit",
+        "auth",
+        "bet",
+        "win",
+        "transactions",
+        "withdraw",
+        "logout",
+    ]:
         vals = step_latencies.get(step_name, [])
         if not vals:
             continue
@@ -1145,5 +1242,9 @@ def run_all(
     # Write summary
     summary_path = write_summary_md(all_results)
     logger.info("Summary → %s", summary_path)
+
+    # Auto-update README
+    update_readme(summary_path)
+    logger.info("README updated with latest summary")
 
     return all_results

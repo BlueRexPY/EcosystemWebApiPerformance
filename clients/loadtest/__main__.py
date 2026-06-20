@@ -69,6 +69,9 @@ def _setup_logging(verbose: bool = False) -> None:
     handler.setFormatter(_ColorFormatter())
     logging.root.setLevel(level)
     logging.root.handlers = [handler]
+    # Suppress httpx logging — it logs every request at INFO, killing throughput
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _cmd_list(_args: argparse.Namespace) -> int:

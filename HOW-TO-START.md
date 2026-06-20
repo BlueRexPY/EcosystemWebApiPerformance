@@ -1,89 +1,107 @@
-# How to Start — Ecosystem Web API Performance Benchmark
+# How to Start — Casino Microservices Benchmark
 
 ## Prerequisites
 
-| Tool               | Min Version | Check                      |
-| ------------------ | ----------- | -------------------------- |
-| Docker + Compose   | 24+         | `docker compose version`   |
-| Bun                | 1.1+        | `bun --version`            |
-| Go                 | 1.22+       | `go version`               |
-| .NET SDK           | 9.0+        | `dotnet --version`         |
-| kubectl (optional) | 1.29+       | `kubectl version --client` |
+| Tool             | Min Version | Check                    |
+| ---------------- | ----------- | ------------------------ |
+| Docker + Compose | 24+         | `docker compose version` |
+| .NET SDK         | 10.0+       | `dotnet --version`       |
+| Python           | 3.9+        | `python3 --version`      |
+| wrk              | 4.1+        | `wrk --version`          |
 
-## 1. Infrastructure Layer
-
-```bash
-# Start PostgreSQL, Redis, Prometheus
-docker compose up -d
-
-# Confirm all three are healthy
-docker compose ps
-
-# Verify 100,000 players seeded
-docker exec -it casino_postgres psql -U engine_admin -d casino_db -c "SELECT COUNT(*) FROM wallets;"
-# Expected: 100000
-```
-
-## 2. Run the Stacks
-
-### Bun + Elysia (TypeScript)
+## 1. Start Everything
 
 ```bash
-cd apps/js
-bun install
-bun run dev
-# Listening on :3000
+cd /home/admin/Projects/Benchmarks/EcosystemWebApiPerfromance
+
+# Start all 12 containers: 4 PostgreSQL, Redis, Prometheus, 5 microservices
+docker compose up -d --build
+
+# Wait for healthy (~30s for DB seeding of 100K rows)
+watch docker compose ps
+
+# Verify seed data
+docker exec casino_pg_player psql -U engine_admin -d player_db -c "SELECT COUNT(*) FROM players;"
+# → 100000
+
+docker exec casino_pg_ledger psql -U engine_admin -d ledger_db -c "SELECT COUNT(*) FROM wallets;"
+# → 100000
 ```
 
-### Go + Fiber
+## 2. Smoke Test
 
 ```bash
-cd apps/go
-/home/admin/.local/go/bin/go run .
-# Listening on :3001
+# Health check
+curl http://localhost:3002/health
+# → Healthy
+
+# GraphQL login
+curl -s -X POST http://localhost:3002/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation { login(username: \"player_000001\", password: \"test\") { token player { id username } } }"}'
+
+# REST authenticate
+curl -s -X POST http://localhost:3002/casino/authenticate \
+  -H "Content-Type: application/json" \
+  -d '{"token":"session-player-00001","gameId":"slot-mega-7"}'
+
+# REST bet
+curl -s -X POST http://localhost:3002/casino/callback \
+  -H "Content-Type: application/json" \
+  -d '{"type":"bet","amountCents":1000,"transactionId":"tx-001","roundId":"round-001","token":"session-player-00001","gameId":"slot-mega-7"}'
 ```
 
-### .NET 9
+## 3. Run Benchmarks
 
 ```bash
-cd apps/cs
-dotnet run
-# Listening on :3002
+# List available scenarios
+python3 -m clients.loadtest list
+
+# Quick single test (5s)
+python3 -m clients.loadtest run --ecosystem cs --scenario casino_bet --client wrk --duration 5
+
+# Full .NET 10 suite (12 scenarios, 20s each)
+python3 -m clients.loadtest run --ecosystem cs --client wrk
+
+# Compare all ecosystems
+python3 -m clients.loadtest run --client wrk --ecosystem cs --ecosystem go --ecosystem js
 ```
 
-## 3. Run the Benchmark
+Results auto-saved to `results/loadtests/Summary.md` and auto-injected into `README.md`.
 
-```bash
-cd clients
-# TBD — load-generation harness details coming soon
-```
+## Service Map
 
-## 4. Kubernetes Deployment (Optional)
-
-```bash
-# Apply infra manifests (namespace, Redis)
-kubectl apply -f k8s/infra.yaml
-
-# Deploy each stack (manifests TBD)
-# kubectl apply -f apps/go/k8s/
-# kubectl apply -f apps/js/k8s/
-# kubectl apply -f apps/cs/k8s/
-```
-
-## Endpoints
-
-Each stack exposes the same REST contract:
+| Service       | Port | DB Port | DB Name   | Health    |
+| ------------- | ---- | ------- | --------- | --------- |
+| Gateway       | 3002 | —       | —         | `/health` |
+| PlayerService | 5001 | 5433    | player_db | gRPC      |
+| LedgerService | 5002 | 5434    | ledger_db | gRPC      |
+| CasinoService | 5003 | 5435    | casino_db | gRPC      |
+| PSPService    | 5004 | 5436    | psp_db    | gRPC      |
+| Redis         | 6379 | —       | —         | `PING`    |
 
 ## Useful Commands
 
 ```bash
-# Check Redis hit/miss ratio + AOF status
-docker exec -it casino_redis redis-cli INFO stats | grep keyspace
-docker exec -it casino_redis redis-cli INFO persistence | grep aof
+# Check all container logs
+docker compose logs -f --tail=20
 
-# Postgres active connections
-docker exec -it casino_postgres psql -U engine_admin -d casino_db -c "SELECT count(*) FROM pg_stat_activity;"
+# Check a specific service
+docker logs casino_gateway --tail=30
 
-# Prometheus UI
-open http://localhost:9090
+# PostgreSQL — active connections
+docker exec casino_pg_ledger psql -U engine_admin -d ledger_db -c "SELECT count(*) FROM pg_stat_activity;"
+
+# Redis — keyspace stats
+docker exec casino_redis redis-cli INFO keyspace
+
+# Rebuild after code changes
+docker compose build --no-cache && docker compose up -d --force-recreate
 ```
+
+## Seed Data
+
+- **100,000 players** (`player_000001` … `player_100000`) in `player_db`
+- **100,000 wallets** with matching UUIDs, $100,000 each in `ledger_db`
+- Casino and PSP databases schema-only (filled at runtime)
+- Deterministic UUIDs via `uuid_generate_v5` — same player has same ID across DBs

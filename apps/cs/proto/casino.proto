@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package casino;
+option csharp_namespace = "CasinoApi.Casino";
+option go_package = "github.com/casinoapi/casinoapi-go/v2/casinopb";
+
+service CasinoService {
+  rpc Bet (BetRequest) returns (BetReply);
+  rpc Win (WinRequest) returns (WinReply);
+  rpc Rollback (CasinoRollbackRequest) returns (CasinoRollbackReply);
+}
+
+message BetRequest {
+  string session_token = 1;
+  string provider_transaction_id = 2;
+  int64 amount = 3;
+  string game_id = 4;
+  string round_id = 5;
+}
+
+message BetReply {
+  bool success = 1;
+  string round_transaction_id = 2;
+  int64 new_balance = 3;
+  string error = 4;
+}
+
+message WinRequest {
+  string session_token = 1;
+  string provider_transaction_id = 2;
+  int64 amount = 3;
+  string game_id = 4;
+  string round_id = 5;
+}
+
+message WinReply {
+  bool success = 1;
+  string round_transaction_id = 2;
+  int64 new_balance = 3;
+  string error = 4;
+}
+
+message CasinoRollbackRequest {
+  string provider_transaction_id = 1;
+}
+
+message CasinoRollbackReply {
+  bool success = 1;
+  string error = 2;
+}

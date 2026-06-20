@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package psp;
+option csharp_namespace = "CasinoApi.Psp";
+option go_package =  "github.com/casinoapi/casinoapi-go/v2/psppb";
+
+service PSPService {
+  rpc Deposit (DepositRequest) returns (DepositReply);
+  rpc Withdraw (WithdrawRequest) returns (WithdrawReply);
+}
+
+message DepositRequest {
+  string player_id = 1;
+  int64 amount = 2;
+  string provider_reference = 3;
+}
+
+message DepositReply {
+  bool success = 1;
+  string payment_id = 2;
+  int64 new_balance = 3;
+  string error = 4;
+}
+
+message WithdrawRequest {
+  string player_id = 1;
+  int64 amount = 2;
+  string provider_reference = 3;
+}
+
+message WithdrawReply {
+  bool success = 1;
+  string payment_id = 2;
+  int64 new_balance = 3;
+  string error = 4;
+}

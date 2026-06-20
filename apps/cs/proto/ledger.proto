@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package ledger;
+option csharp_namespace = "CasinoApi.Ledger";
+option go_package = "github.com/casinoapi/casinoapi-go/v2/ledgerpb";
+
+service LedgerService {
+  rpc GetBalance (GetBalanceRequest) returns (GetBalanceReply);
+  rpc Reserve (ReserveRequest) returns (ReserveReply);
+  rpc Commit (CommitRequest) returns (CommitReply);
+  rpc Settle (SettleRequest) returns (SettleReply);
+  rpc Rollback (RollbackRequest) returns (RollbackReply);
+  rpc ListTransactions (ListTransactionsRequest) returns (ListTransactionsReply);
+  rpc EnsureWallet (EnsureWalletRequest) returns (EnsureWalletReply);
+}
+
+message GetBalanceRequest {
+  string player_id = 1;
+}
+
+message GetBalanceReply {
+  int64 balance = 1;
+  int64 reserved = 2;
+  int32 version = 3;
+}
+
+message ReserveRequest {
+  string player_id = 1;
+  int64 amount = 2;
+  string idempotency_key = 3;
+}
+
+message ReserveReply {
+  bool success = 1;
+  string transaction_id = 2;
+  int64 new_balance = 3;
+  int64 new_reserved = 4;
+  string error = 5;
+}
+
+message CommitRequest {
+  string transaction_id = 1;
+}
+
+message CommitReply {
+  bool success = 1;
+  int64 new_balance = 2;
+  int64 new_reserved = 3;
+  string error = 4;
+}
+
+message SettleRequest {
+  string player_id = 1;
+  int64 amount = 2;
+  string idempotency_key = 3;
+}
+
+message SettleReply {
+  bool success = 1;
+  string transaction_id = 2;
+  int64 new_balance = 3;
+  string error = 4;
+}
+
+message RollbackRequest {
+  string transaction_id = 1;
+}
+
+message RollbackReply {
+  bool success = 1;
+  int64 new_balance = 2;
+  int64 new_reserved = 3;
+  string error = 4;
+}
+
+message ListTransactionsRequest {
+  string player_id = 1;
+  int32 limit = 2;
+}
+
+message ListTransactionsReply {
+  repeated TransactionItem items = 1;
+}
+
+message TransactionItem {
+  string id = 1;
+  string type = 2;
+  int64 amount_cents = 3;
+  string created_at = 4;
+}
+
+message EnsureWalletRequest {
+  string player_id = 1;
+}
+
+message EnsureWalletReply {
+  bool success = 1;
+}

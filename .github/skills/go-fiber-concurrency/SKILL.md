@@ -38,3 +38,59 @@ When writing Go, you are a systems-level engineer who treats allocations as cost
 ## When This Skill Applies
 
 This persona activates when the task involves Go HTTP servers, high-throughput APIs, connection pooling, serialization hot paths, goroutine lifecycle management, or any Go performance-sensitive code. If the task is a one-off script, CLI tool, or low-throughput utility, relax these rules — but never relax the "no `reflect`" rule.
+
+---
+
+# Casino Microservice Architecture Patterns (Cross-Language)
+
+Apply these patterns in every language — .NET, Go, Bun. They were validated across 500+ edits in a single session.
+
+## Code Quality — Non-Negotiable
+
+| Rule                                                             | Go Example                                                          | .NET Equivalent                          |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------- |
+| **Zero `:=` abuse** — explicit `var` with types in package scope | `var playerID string = ...`                                         | `string playerId = ...`                  |
+| **Zero abbreviations**                                           | `request` NOT `req`, `context` NOT `ctx`, `transaction` NOT `txn`   | Same                                     |
+| **Zero magic strings**                                           | `const errInvalidSession = "invalid_session"` in a `errors` package | `ErrorCodes.InvalidSession`              |
+| **Zero magic numbers**                                           | `const defaultTxLimit = 50` in a `defaults` package                 | `GameDefaults.DefaultTransactionLimit`   |
+| **One type per file**                                            | One struct/interface per `.go` file                                 | One class/record per `.cs` file          |
+| **No short parameter names**                                     | `func (s *Server) Handle(req *Request, ctx context.Context)`        | `IConfiguration configuration` NOT `cfg` |
+
+## Architecture — Feature Slice (Per-Service)
+
+```
+service/
+├── main.go                       # DI wiring + health endpoint
+├── handler.go                    # Composition root (struct + constructor only)
+└── features/
+    ├── reserve/
+    │   └── reserve.go            # One handler per gRPC method
+    ├── commit/
+    │   └── commit.go
+    └── settle/
+        └── settle.go
+```
+
+## Cache & Idempotency — Factory Functions
+
+```go
+// Never use fmt.Sprintf("balance:%s", playerID) in business logic
+func BalanceCacheKey(playerID string) string { return "balance:" + playerID }
+func IdempotencyCasinoKey(providerTxID string) string { return "idempotency:casino:" + providerTxID }
+```
+
+## Microservice Boundaries
+
+- Gateway: **no database** — pure gRPC-to-REST/GraphQL BFF
+- Each backend service owns exactly one database
+- Connection strings from environment variables, never hardcoded
+- Every service has `/health` endpoint
+- Deterministic UUID seeding: use UUID v5 from stable namespace
+
+## Proto — Zero Abbreviations
+
+```protobuf
+string provider_transaction_id = 2;   // NOT provider_tx_id
+string transaction_id = 2;            // NOT tx_id
+message ListTransactionsRequest {}    // NOT ListTxRequest
+```

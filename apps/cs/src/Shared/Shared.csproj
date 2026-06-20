@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>CasinoApi.Shared</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="StackExchange.Redis" Version="2.8.16" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.67.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.68.1" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="9.0.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="..\..\proto\player.proto" GrpcServices="Both" />
+    <Protobuf Include="..\..\proto\ledger.proto" GrpcServices="Both" />
+    <Protobuf Include="..\..\proto\casino.proto" GrpcServices="Both" />
+    <Protobuf Include="..\..\proto\psp.proto" GrpcServices="Both" />
+  </ItemGroup>
+</Project>

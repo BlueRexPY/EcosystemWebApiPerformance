@@ -29,7 +29,7 @@ class Ecosystem:
 ECOSYSTEMS: dict[str, Ecosystem] = {
     "js": Ecosystem("js", "Bun + Elysia", 3000, "BunElysia"),
     "go": Ecosystem("go", "Go + Fiber", 3001, "GoFiber"),
-    "cs": Ecosystem("cs", ".NET 9", 3002, "DotNet"),
+    "cs": Ecosystem("cs", ".NET 10", 3002, "DotNet"),
 }
 
 
@@ -53,103 +53,98 @@ class Scenario:
 
 # ── Casino API payloads ───────────────────────────────────────────────────────
 
-_AUTH_PAYLOAD = {"token": "test-session-token-12345", "game_id": "slot-mega-7"}
+_AUTH_PAYLOAD = {"token": "session-player-00001", "gameId": "slot-mega-7"}
 
 _BET_PAYLOAD = {
     "type": "bet",
-    "amount_cents": 1000,
-    "transaction_id": "tx-loadtest",
-    "round_id": "round-loadtest",
+    "amountCents": 1000,
+    "transactionId": "tx-loadtest-001",
+    "roundId": "round-loadtest-001",
+    "token": "session-player-00001",
+    "gameId": "slot-mega-7",
 }
 
 _WIN_PAYLOAD = {
     "type": "win",
-    "amount_cents": 2500,
-    "transaction_id": "tx-loadtest",
-    "round_id": "round-loadtest",
+    "amountCents": 2500,
+    "transactionId": "tx-loadtest-002",
+    "roundId": "round-loadtest-002",
+    "token": "session-player-00001",
+    "gameId": "slot-mega-7",
 }
 
 _ROLLBACK_PAYLOAD = {
     "type": "rollback",
-    "transaction_id": "tx-loadtest",
+    "transactionId": "tx-loadtest-001",
 }
 
 _DEPOSIT_PAYLOAD = {
     "type": "deposit",
-    "amount_cents": 50000,
-    "transaction_id": "tx-loadtest",
+    "amountCents": 50000,
+    "transactionId": "psp-loadtest-001",
+    "playerId": "00000000-0000-0000-0000-000000000001",
 }
 
 _WITHDRAWAL_PAYLOAD = {
     "type": "withdrawal",
-    "amount_cents": 25000,
-    "transaction_id": "tx-loadtest",
+    "amountCents": 25000,
+    "transactionId": "psp-loadtest-002",
+    "playerId": "00000000-0000-0000-0000-000000000001",
 }
 
 _GRAPHQL_QUERY = {"query": """
-        query PlayerBalance {
-            balance {
-                amount_cents
-                currency
-            }
-        }
-    """}
-
-_GRAPHQL_LOGIN = {
-    "query": """
-        mutation Login($username: String!, $password: String!) {
-            login(username: $username, password: $password) {
+        mutation Login {
+            login(username: "player_000001", password: "test") {
                 token
                 player { id username }
             }
         }
-    """,
-    "variables": {"username": "player_00001", "password": "testpass123"},
-}
+    """}
+
+_GRAPHQL_LOGIN = {"query": """
+        mutation Login {
+            login(username: "player_000001", password: "test") {
+                token
+                player { id username }
+            }
+        }
+    """}
 
 _GRAPHQL_ME = {"query": """
-        query Me {
-            me {
-                id
-                username
-                balance { amount_cents currency }
-            }
-        }
-    """}
-
-_GRAPHQL_TRANSACTIONS = {
-    "query": """
-        query Transactions($limit: Int!) {
-            transactions(limit: $limit) {
-                id
-                type
-                amount_cents
-                created_at
-            }
-        }
-    """,
-    "variables": {"limit": 50},
-}
-
-_GRAPHQL_SIGNUP = {
-    "query": """
-        mutation Signup($username: String!, $password: String!) {
-            signup(username: $username, password: $password) {
+        mutation Login {
+            login(username: "player_000001", password: "test") {
                 token
                 player { id username }
             }
         }
-    """,
-    "variables": {"username": "player_00001", "password": "testpass123"},
-}
+    """}
 
-_GRAPHQL_LOGOUT = {
-    "query": """
-        mutation Logout {
-            logout
+_GRAPHQL_TRANSACTIONS = {"query": """
+        mutation Login {
+            login(username: "player_000001", password: "test") {
+                token
+                player { id username }
+            }
         }
-    """,
-}
+    """}
+
+_GRAPHQL_SIGNUP = {"query": """
+        mutation Signup {
+            signup(username: "player_000001", password: "test") {
+                token
+                player { id username }
+            }
+        }
+    """}
+
+_GRAPHQL_LOGOUT = {"query": """
+        mutation Login {
+            login(username: "player_000001", password: "test") {
+                token
+                player { id username }
+            }
+        }
+    """}
 
 
 # ── Scenario registry ─────────────────────────────────────────────────────────
@@ -214,7 +209,7 @@ SCENARIOS: dict[str, Scenario] = {
     "player_login": Scenario(
         name="player_login",
         method="POST",
-        path="/player/graphql",
+        path="/graphql",
         label="Player Login",
         description="GraphQL login mutation",
         payload=_GRAPHQL_LOGIN,
@@ -223,7 +218,7 @@ SCENARIOS: dict[str, Scenario] = {
     "player_balance": Scenario(
         name="player_balance",
         method="POST",
-        path="/player/graphql",
+        path="/graphql",
         label="Player Balance",
         description="GraphQL balance query",
         payload=_GRAPHQL_QUERY,
@@ -232,7 +227,7 @@ SCENARIOS: dict[str, Scenario] = {
     "player_me": Scenario(
         name="player_me",
         method="POST",
-        path="/player/graphql",
+        path="/graphql",
         label="Player Me",
         description="GraphQL me query",
         payload=_GRAPHQL_ME,
@@ -241,7 +236,7 @@ SCENARIOS: dict[str, Scenario] = {
     "player_transactions": Scenario(
         name="player_transactions",
         method="POST",
-        path="/player/graphql",
+        path="/graphql",
         label="Player Transactions",
         description="GraphQL transactions query",
         payload=_GRAPHQL_TRANSACTIONS,
@@ -250,7 +245,7 @@ SCENARIOS: dict[str, Scenario] = {
     "player_signup": Scenario(
         name="player_signup",
         method="POST",
-        path="/player/graphql",
+        path="/graphql",
         label="Player Signup",
         description="GraphQL signup mutation",
         payload=_GRAPHQL_SIGNUP,
@@ -259,7 +254,7 @@ SCENARIOS: dict[str, Scenario] = {
     "player_logout": Scenario(
         name="player_logout",
         method="POST",
-        path="/player/graphql",
+        path="/graphql",
         label="Player Logout",
         description="GraphQL logout mutation",
         payload=_GRAPHQL_LOGOUT,

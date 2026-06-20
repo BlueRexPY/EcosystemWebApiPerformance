@@ -1,22 +1,83 @@
 version: "3.8"
 
 services:
-  postgres:
+  # ── PostgreSQL — separate DB per microservice ─────────────────────────
+  postgres-player:
     image: postgres:16-alpine
-    container_name: casino_postgres
+    container_name: casino_pg_player
+    environment:
+      POSTGRES_DB: player_db
+      POSTGRES_USER: engine_admin
+      POSTGRES_PASSWORD: super_secure_pass_123
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata_player:/var/lib/postgresql/data
+      - ./apps/cs/init/player:/docker-entrypoint-initdb.d
+    command:
+      ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=128MB"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engine_admin -d player_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres-ledger:
+    image: postgres:16-alpine
+    container_name: casino_pg_ledger
+    environment:
+      POSTGRES_DB: ledger_db
+      POSTGRES_USER: engine_admin
+      POSTGRES_PASSWORD: super_secure_pass_123
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata_ledger:/var/lib/postgresql/data
+      - ./apps/cs/init/ledger:/docker-entrypoint-initdb.d
+    command:
+      ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=128MB"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engine_admin -d ledger_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres-casino:
+    image: postgres:16-alpine
+    container_name: casino_pg_casino
     environment:
       POSTGRES_DB: casino_db
       POSTGRES_USER: engine_admin
       POSTGRES_PASSWORD: super_secure_pass_123
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./init-scripts:/docker-entrypoint-initdb.d
+      - pgdata_casino:/var/lib/postgresql/data
+      - ./apps/cs/init/casino:/docker-entrypoint-initdb.d
     command:
-      ["postgres", "-c", "max_connections=200", "-c", "shared_buffers=256MB"]
+      ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=128MB"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U engine_admin -d casino_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres-psp:
+    image: postgres:16-alpine
+    container_name: casino_pg_psp
+    environment:
+      POSTGRES_DB: psp_db
+      POSTGRES_USER: engine_admin
+      POSTGRES_PASSWORD: super_secure_pass_123
+    ports:
+      - "5436:5432"
+    volumes:
+      - pgdata_psp:/var/lib/postgresql/data
+      - ./apps/cs/init/psp:/docker-entrypoint-initdb.d
+    command:
+      ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=128MB"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engine_admin -d psp_db"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -24,9 +85,6 @@ services:
   redis:
     image: redis:7.2-alpine
     container_name: casino_redis
-    ports:
-      - "6379:6379"
-    # Tuned for synchronous data consistency: sync disk mutations every second
     command: redis-server --appendonly yes --appendfsync everysec --maxmemory 512mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -37,10 +95,106 @@ services:
   prometheus:
     image: prom/prometheus:v2.45.0
     container_name: casino_prometheus
-    ports:
-      - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
 
+  # ── Casino Microservices ──────────────────────────────────────────────
+
+  player-service:
+    build:
+      context: ./apps/cs
+      dockerfile: Dockerfile
+    container_name: casino_player
+    environment:
+      - SERVICE=player
+      - ASPNETCORE_URLS=http://0.0.0.0:5001
+      - ConnectionStrings__PlayerDb=Host=postgres-player;Port=5432;Database=player_db;Username=engine_admin;Password=super_secure_pass_123
+      - ConnectionStrings__Redis=redis:6379
+      - GRPC_LEDGER=http://casino_ledger:5002
+    depends_on:
+      postgres-player:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ledger-service:
+    build:
+      context: ./apps/cs
+      dockerfile: Dockerfile
+    container_name: casino_ledger
+    environment:
+      - SERVICE=ledger
+      - ASPNETCORE_URLS=http://0.0.0.0:5002
+      - ConnectionStrings__LedgerDb=Host=postgres-ledger;Port=5432;Database=ledger_db;Username=engine_admin;Password=super_secure_pass_123
+      - ConnectionStrings__Redis=redis:6379
+    depends_on:
+      postgres-ledger:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  casino-service:
+    build:
+      context: ./apps/cs
+      dockerfile: Dockerfile
+    container_name: casino_casino
+    environment:
+      - SERVICE=casino
+      - ASPNETCORE_URLS=http://0.0.0.0:5003
+      - ConnectionStrings__CasinoDb=Host=postgres-casino;Port=5432;Database=casino_db;Username=engine_admin;Password=super_secure_pass_123
+      - ConnectionStrings__Redis=redis:6379
+      - GRPC_LEDGER=http://casino_ledger:5002
+      - GRPC_PLAYER=http://casino_player:5001
+    depends_on:
+      postgres-casino:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  psp-service:
+    build:
+      context: ./apps/cs
+      dockerfile: Dockerfile
+    container_name: casino_psp
+    environment:
+      - SERVICE=psp
+      - ASPNETCORE_URLS=http://0.0.0.0:5004
+      - ConnectionStrings__PspDb=Host=postgres-psp;Port=5432;Database=psp_db;Username=engine_admin;Password=super_secure_pass_123
+      - ConnectionStrings__Redis=redis:6379
+      - GRPC_LEDGER=http://casino_ledger:5002
+    depends_on:
+      postgres-psp:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: ./apps/cs
+      dockerfile: Dockerfile
+    container_name: casino_gateway
+    environment:
+      - SERVICE=gateway
+      - ASPNETCORE_URLS=http://0.0.0.0:3002
+      - ConnectionStrings__Redis=redis:6379
+      - GRPC_PLAYER=http://casino_player:5001
+      - GRPC_LEDGER=http://casino_ledger:5002
+      - GRPC_CASINO=http://casino_casino:5003
+      - GRPC_PSP=http://casino_psp:5004
+    ports:
+      - "3002:3002"
+    depends_on:
+      player-service:
+        condition: service_started
+      ledger-service:
+        condition: service_started
+      casino-service:
+        condition: service_started
+      psp-service:
+        condition: service_started
+
 volumes:
-  pgdata:
+  pgdata_player:
+  pgdata_ledger:
+  pgdata_casino:
+  pgdata_psp:

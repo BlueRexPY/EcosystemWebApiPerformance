@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package player;
+option csharp_namespace = "CasinoApi.Player";
+option go_package = "github.com/casinoapi/casinoapi-go/v2/playerpb";
+
+service PlayerService {
+  rpc GetPlayer (GetPlayerRequest) returns (GetPlayerReply);
+  rpc GetPlayers (GetPlayersRequest) returns (GetPlayersReply);
+  rpc GetPlayerByUsername (GetPlayerByUsernameRequest) returns (GetPlayerReply);
+  rpc Authenticate (AuthenticateRequest) returns (AuthenticateReply);
+  rpc CreatePlayer (CreatePlayerRequest) returns (CreatePlayerReply);
+}
+
+message GetPlayerRequest {
+  string player_id = 1;
+}
+
+message GetPlayerReply {
+  bool found = 1;
+  string player_id = 2;
+  string username = 3;
+  string kyc_status = 4;
+  int64 balance = 5;
+  int64 reserved = 6;
+}
+
+message GetPlayersRequest {
+  repeated string player_ids = 1;
+}
+
+message GetPlayersReply {
+  repeated GetPlayerReply players = 1;
+}
+
+message GetPlayerByUsernameRequest {
+  string username = 1;
+}
+
+message AuthenticateRequest {
+  string username = 1;
+  string password_hash = 2;
+}
+
+message AuthenticateReply {
+  bool success = 1;
+  string player_id = 2;
+  string username = 3;
+  string token = 4;
+}
+
+message CreatePlayerRequest {
+  string username = 1;
+  string password_hash = 2;
+}
+
+message CreatePlayerReply {
+  bool success = 1;
+  string player_id = 2;
+}
